@@ -4,7 +4,7 @@ name: Fetch Express Data
 on:
   workflow_dispatch:  # 可以手动运行
   schedule:
-    - cron: '*/2 * * * *'  # 每1小时运行
+    - cron: '*/5 * * * *'  # 每1小时运行
 
 jobs:
   fetch:
