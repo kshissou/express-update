@@ -43,19 +43,20 @@ def fetch_packages():
             continue
         tracking = span.text.strip()
 
-        # 查找“到库时间”
+        # ✅ 关键修复：找到父级标签的所有兄弟节点中匹配“到库时间”
         arrive_time = ""
-        container_div = span.find_parent("div")
-        if container_div:
-            time_pair = container_div.find_all("p", class_="more_massage")
-            for p in time_pair:
+        parent = span.find_parent()
+        if parent:
+            siblings = parent.find_all_next("p", class_="more_massage")
+            for p in siblings:
+                if pkg_id not in p.get("class", []):  # 限定只查对应包裹的元素
+                    continue
                 label = p.find("span", class_="SpanTitleLang")
                 value = p.find("span", class_="SpanTextLang")
                 if label and "到库时间" in label.text and value:
                     arrive_time = value.text.strip()
                     break
 
-        # ✅ Debug 输出
         print(f"📦 单号: {tracking} | 重量: {weight} | 到库时间: {arrive_time}")
 
         records.append({
@@ -64,6 +65,7 @@ def fetch_packages():
             "谁的快递": "",
             "到库时间": arrive_time
         })
+
     return pd.DataFrame(records)
 
 # ========== 合并新增数据 ==========
