@@ -1,97 +1,89 @@
-import os
 import requests
-import urllib3
 from bs4 import BeautifulSoup
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
+import os
 import json
 
-# 本地运行才加载dotenv
-if os.getenv("RUN_LOCAL") == "1":
-    from dotenv import load_dotenv
-    load_dotenv()
+# ========== 配置 ==========
+SPREADSHEET_NAME = "express-claim-app"
+MAIN_SHEET = "Sheet1"
 
-# 关闭 SSL 证书验证警告
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# 从环境变量读取 Cookie 和 Google 认证信息
+cookie_string = os.environ.get("YUANRI_COOKIE", "")
+json_str = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON", "")
 
-# 获取环境变量
-cookie = os.environ["YUANRI_COOKIE"]
-google_credentials = json.loads(os.environ["GOOGLE_APPLICATION_CREDENTIALS_JSON"])
+# 目标网页地址
+URL = "http://www.yuanriguoji.com/Phone/Package"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Cookie": cookie_string
+}
 
-# 获取 Google Sheets 客户端
-def get_gsheet_client():
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    credentials = Credentials.from_service_account_info(google_credentials, scopes=scopes)
-    gc = gspread.authorize(credentials)
-    return gc
+# ========== 函数定义 ==========
 
-# 抓取网页并解析包裹数据
+def get_gsheet():
+    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    info = json.loads(json_str)
+    creds = Credentials.from_service_account_info(info, scopes=scopes)
+    client = gspread.authorize(creds)
+    return client
+
 def fetch_packages():
-    url = "https://www.yuanriguoji.com/Package/Package_Select_Package.aspx"
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Cookie": cookie
-    }
-    response = requests.get(url, headers=headers, verify=False)
-    soup = BeautifulSoup(response.content, "html.parser")
+    res = requests.get(URL, headers=HEADERS)
+    soup = BeautifulSoup(res.text, "html.parser")
+    inputs = soup.find_all("input", class_="chk_select")
 
-    packages = []
-    rows = soup.find_all("tr", class_="Grid_Row_Style")
+    records = []
+    for tag in inputs:
+        pkg_id = tag.get("value")
+        weight = tag.get("data-weight", "0")
+        span = soup.find("span", {"name": "BillCode", "data-id": pkg_id})
+        # 查找对应的“到库时间”
+        time_tag = soup.find("p", class_="more_massage Hide_" + str(pkg_id))
+        in_time = ""
+        if time_tag:
+            time_span = time_tag.find("span", class_="SpanTextLang")
+            if time_span:
+                in_time = time_span.text.strip()
 
-    for row in rows:
-        billcode_span = row.find("span", {"name": "BillCode"})
-        if not billcode_span:
-            continue
-        billcode = billcode_span.text.strip()
+        if span:
+            tracking = span.text.strip()
+            records.append({
+                "快递单号": tracking,
+                "重量（kg）": weight,
+                "谁的快递": "",
+                "到库时间": in_time
+            })
+    return pd.DataFrame(records)
 
-        tds = row.find_all("td")
-        weight = tds[7].text.strip().replace("kg", "") if len(tds) >= 8 else ""
-
-        arrival_time = ""
-        next_p = row.find_next("p", class_="more_massage Hide_12123113")
-        if next_p:
-            spans = next_p.find_all("span")
-            if len(spans) >= 2 and "到库时间" in spans[0].text:
-                arrival_time = spans[1].text.strip()
-
-        packages.append({
-            "快递单号": billcode,
-            "重量（kg）": weight,
-            "到货时间": arrival_time
-        })
-
-    return pd.DataFrame(packages)
-
-# 更新 Google Sheets 表格
 def update_main_sheet(new_df):
-    gc = get_gsheet_client()
-    sheet = gc.open("express-claim-app").worksheet("主表")
-    existing_data = sheet.get_all_records()
-    existing_df = pd.DataFrame(existing_data)
+    client = get_gsheet()
+    sheet = client.open(SPREADSHEET_NAME).worksheet(MAIN_SHEET)
+    existing = pd.DataFrame(sheet.get_all_records())
 
-    if "快递单号" not in existing_df.columns:
-        print("❌ 表格中未找到 '快递单号' 列")
-        return
+    if existing.empty:
+        existing = pd.DataFrame(columns=["快递单号", "重量（kg）", "谁的快递", "到库时间"])
 
-    existing_df["快递单号"] = existing_df["快递单号"].astype(str)
+    existing["快递单号"] = existing["快递单号"].astype(str)
     new_df["快递单号"] = new_df["快递单号"].astype(str)
 
-    new_tracking_numbers = set(new_df["快递单号"])
-    existing_tracking_numbers = set(existing_df["快递单号"])
+    existing_ids = set(existing["快递单号"])
+    new_entries = new_df[~new_df["快递单号"].isin(existing_ids)]
 
-    print(f"📦 抓取到的所有单号： {sorted(list(new_tracking_numbers))}")
-    print(f"📄 表中已有单号： {sorted(list(existing_tracking_numbers))}")
+    print(f"📦 抓取到的所有单号： {list(new_df['快递单号'])}")
+    print(f"📄 表中已有单号： {list(existing['快递单号'])}")
 
-    to_add = new_df[~new_df["快递单号"].isin(existing_tracking_numbers)]
-
-    if to_add.empty:
+    if new_entries.empty:
         print("📭 没有新增记录，跳过更新 ✅")
-    else:
-        print(f"✅ 已新增 {len(to_add)} 条记录，并更新 Google Sheets ✅")
-        combined_df = pd.concat([existing_df, to_add], ignore_index=True)
-        sheet.clear()
-        sheet.update([combined_df.columns.tolist()] + combined_df.values.tolist())
+        return
+
+    updated = pd.concat([existing, new_entries], ignore_index=True)
+    updated = updated[["快递单号", "重量（kg）", "谁的快递", "到库时间"]]
+    sheet.clear()
+    sheet.update([updated.columns.values.tolist()] + updated.values.tolist())
+    print(f"✅ 已新增 {len(new_entries)} 条记录，并更新 Google Sheets ✅")
 
 def main():
     print("🚚 抓取快递数据中...")
@@ -99,9 +91,9 @@ def main():
     print(f"📦 共获取 {len(df)} 条快递记录")
     if df.empty:
         print("⚠️ 未抓取到任何记录，请检查 Cookie 或页面结构")
-    else:
-        update_main_sheet(df)
-        print("✅ Google Sheets 已更新")
+        return
+    update_main_sheet(df)
+    print("✅ Google Sheets 已更新")
 
 if __name__ == "__main__":
     main()
