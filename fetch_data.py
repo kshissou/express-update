@@ -5,16 +5,13 @@ import gspread
 from google.oauth2.service_account import Credentials
 import os
 import json
-from dotenv import load_dotenv
 
 # ========== 配置 ==========
 SPREADSHEET_NAME = "express-claim-app"
 MAIN_SHEET = "Sheet1"
 
-# 加载本地 .env 文件
-load_dotenv()
-
-# 从环境变量中获取 Cookie 和 Google 凭证
+# ❌ 不再加载 .env
+# ✅ 直接从环境变量获取
 cookie_string = os.environ.get("YUANRI_COOKIE", "")
 json_str = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON", "")
 
