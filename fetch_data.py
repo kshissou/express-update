@@ -48,29 +48,32 @@ def fetch_packages():
             })
     return pd.DataFrame(records)
 
-# 更新主表
+# 更新主表（只添加新记录）
 def update_main_sheet(new_df):
     client = get_gsheet()
     sheet = client.open(SPREADSHEET_NAME).worksheet(MAIN_SHEET)
-    existing_data = sheet.get_all_records()
-    existing_df = pd.DataFrame(existing_data)
+    existing = pd.DataFrame(sheet.get_all_records())
 
-    if not new_df.empty:
-        new_df["快递单号"] = new_df["快递单号"].astype(str)
-    if not existing_df.empty:
-        existing_df["快递单号"] = existing_df["快递单号"].astype(str)
+    if existing.empty:
+        print("📄 表为空，首次写入数据")
+        sheet.update([new_df.columns.values.tolist()] + new_df.values.tolist())
+        return
 
-    merged_df = existing_df.copy()
-    new_entries = new_df[~new_df["快递单号"].isin(existing_df["快递单号"])]
+    existing["快递单号"] = existing["快递单号"].astype(str)
+    new_df["快递单号"] = new_df["快递单号"].astype(str)
 
-    if not new_entries.empty:
-        merged_df = pd.concat([merged_df, new_entries], ignore_index=True)
-        print(f"📬 新增 {len(new_entries)} 条记录")
-        sheet.clear()
-        sheet.update([merged_df.columns.values.tolist()] + merged_df.values.tolist())
-        print("✅ Google Sheets 已更新")
-    else:
+    # 打印调试信息
+    print("📦 抓取到的所有单号：", new_df["快递单号"].tolist())
+    print("📄 表中已有单号：", existing["快递单号"].tolist())
+
+    merged_df = pd.concat([existing, new_df[~new_df["快递单号"].isin(existing["快递单号"])]], ignore_index=True)
+    if len(merged_df) == len(existing):
         print("📭 没有新增记录，跳过更新 ✅")
+        return
+
+    print(f"📥 新增记录数：{len(merged_df) - len(existing)}")
+    sheet.clear()
+    sheet.update([merged_df.columns.values.tolist()] + merged_df.values.tolist())
 
 # 主流程
 def main():
@@ -78,6 +81,7 @@ def main():
     df = fetch_packages()
     print(f"📦 共获取 {len(df)} 条快递记录")
     update_main_sheet(df)
+    print("✅ Google Sheets 已更新")
 
 if __name__ == "__main__":
     main()
