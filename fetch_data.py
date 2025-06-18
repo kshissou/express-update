@@ -37,28 +37,26 @@ def fetch_packages():
     records = []
     for tag in inputs:
         pkg_id = tag.get("value")
-        weight = tag.get("data-weight", "0")
+        weight = tag.get("data-weight", "0").strip()
+
+        # 查找该包裹对应的快递单号
         span = soup.find("span", {"name": "BillCode", "data-id": pkg_id})
         if not span:
             continue
         tracking = span.text.strip()
 
-        # ✅ 关键修复：找到父级标签的所有兄弟节点中匹配“到库时间”
+        # 查找对应的“到库时间”
         arrive_time = ""
-        parent = span.find_parent()
-        if parent:
-            siblings = parent.find_all_next("p", class_="more_massage")
-            for p in siblings:
-                if pkg_id not in p.get("class", []):  # 限定只查对应包裹的元素
-                    continue
-                label = p.find("span", class_="SpanTitleLang")
-                value = p.find("span", class_="SpanTextLang")
-                if label and "到库时间" in label.text and value:
-                    arrive_time = value.text.strip()
-                    break
+        # ✅ 找到 input 标签之后的 .more_massage 段落
+        more_msgs = soup.find_all("p", class_=lambda x: x and x.startswith("more_massage") and pkg_id in x)
+        for p in more_msgs:
+            label = p.find("span", class_="SpanTitleLang")
+            value = p.find("span", class_="SpanTextLang")
+            if label and "到库时间" in label.text and value:
+                arrive_time = value.text.strip()
+                break
 
         print(f"📦 单号: {tracking} | 重量: {weight} | 到库时间: {arrive_time}")
-
         records.append({
             "快递单号": tracking,
             "重量（kg）": weight,
@@ -67,6 +65,7 @@ def fetch_packages():
         })
 
     return pd.DataFrame(records)
+
 
 # ========== 合并新增数据 ==========
 def update_main_sheet(new_df):
