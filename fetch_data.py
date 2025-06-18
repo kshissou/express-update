@@ -13,14 +13,14 @@ MAIN_SHEET = "Sheet1"
 cookie_string = os.environ.get("YUANRI_COOKIE", "")
 json_str = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON", "")
 
+# 修复：抓取“全部”状态的页面
 URL = "http://www.yuanriguoji.com/Phone/Package"
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
     "Cookie": cookie_string
 }
 
-# ========== 函数定义 ==========
-
+# ========== 获取 Google Sheets 客户端 ==========
 def get_gsheet():
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     info = json.loads(json_str)
@@ -28,6 +28,7 @@ def get_gsheet():
     client = gspread.authorize(creds)
     return client
 
+# ========== 抓取页面中的快递记录 ==========
 def fetch_packages():
     res = requests.get(URL, headers=HEADERS)
     soup = BeautifulSoup(res.text, "html.parser")
@@ -42,13 +43,20 @@ def fetch_packages():
             continue
         tracking = span.text.strip()
 
-        # 找到这个 span 的最近的 "到库时间" 信息（向上找父元素再找兄弟）
+        # 查找“到库时间”
         arrive_time = ""
-        parent = span.find_parent("div")
-        if parent:
-            time_tag = parent.find("span", class_="SpanTextLang")
-            if time_tag:
-                arrive_time = time_tag.text.strip()
+        container_div = span.find_parent("div")
+        if container_div:
+            time_pair = container_div.find_all("p", class_="more_massage")
+            for p in time_pair:
+                label = p.find("span", class_="SpanTitleLang")
+                value = p.find("span", class_="SpanTextLang")
+                if label and "到库时间" in label.text and value:
+                    arrive_time = value.text.strip()
+                    break
+
+        # ✅ Debug 输出
+        print(f"📦 单号: {tracking} | 重量: {weight} | 到库时间: {arrive_time}")
 
         records.append({
             "快递单号": tracking,
@@ -58,6 +66,7 @@ def fetch_packages():
         })
     return pd.DataFrame(records)
 
+# ========== 合并新增数据 ==========
 def update_main_sheet(new_df):
     client = get_gsheet()
     sheet = client.open(SPREADSHEET_NAME).worksheet(MAIN_SHEET)
