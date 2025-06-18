@@ -7,24 +7,18 @@ import os
 import json
 import tempfile
 
-# ==== 配置 ====
 SPREADSHEET_NAME = "express-claim-app"
 MAIN_SHEET = "Sheet1"
 URL = "http://www.yuanriguoji.com/Phone/Package?WaveHouse=0&Prediction=2&Storage=0&Grounding=0&active=1"
 
-# ==== 构造请求头 ====
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Encoding": "gzip, deflate",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9",
     "Accept-Language": "zh-CN,zh;q=0.9",
-    "Connection": "keep-alive",
     "Referer": "http://www.yuanriguoji.com/",
-    "Cookie": os.environ["YUANRI_COOKIE"],
-    "Upgrade-Insecure-Requests": "1"
+    "Cookie": os.environ["YUANRI_COOKIE"]
 }
 
-# ==== 获取 Google Sheets 客户端 ====
 def get_gsheet():
     json_str = os.environ["GOOGLE_APPLICATION_CREDENTIALS_JSON"]
     with tempfile.NamedTemporaryFile(mode="w+", delete=False) as f:
@@ -36,27 +30,26 @@ def get_gsheet():
         ])
     return gspread.authorize(creds)
 
-# ==== 抓取快递数据 ====
 def fetch_packages():
     res = requests.get(URL, headers=HEADERS)
     soup = BeautifulSoup(res.text, "html.parser")
-    inputs = soup.find_all("input", class_="chk_select")
-
     records = []
-    for tag in inputs:
-        pkg_id = tag.get("value")
-        weight = tag.get("data-weight", "0").strip()
-        span = soup.find("span", {"name": "BillCode", "data-id": pkg_id})
-        if span:
-            tracking = span.text.strip()
+
+    rows = soup.find_all("tr")
+    for row in rows:
+        input_tag = row.find("input", class_="chk_select")
+        span_tag = row.find("span", {"name": "BillCode"})
+        if input_tag and span_tag:
+            tracking = span_tag.text.strip()
+            weight = input_tag.get("data-weight", "0").strip()
             records.append({
                 "快递单号": tracking,
                 "重量（kg）": weight,
                 "谁的快递": ""
             })
+
     return pd.DataFrame(records)
 
-# ==== 更新 Google Sheet，保留认领记录 ====
 def update_main_sheet(new_df):
     if new_df.empty:
         print("⚠️ 未抓取到任何记录，请检查 Cookie 或页面结构")
@@ -86,7 +79,6 @@ def update_main_sheet(new_df):
         sheet.update([merged_df.columns.tolist()] + merged_df.values.tolist())
         print(f"✅ 已新增 {len(new_records)} 条记录并同步到 Google Sheets")
 
-# ==== 主流程 ====
 def main():
     print("🚚 抓取快递数据中...")
     df = fetch_packages()
